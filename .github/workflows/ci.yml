@@ -34,10 +34,10 @@ jobs:
     name: Release
     needs: build-test
     runs-on: ubuntu-latest
-    # Runs on every push to main: semantic-release computes the version and cuts the
-    # tag + GitHub release. The actual Maven Central deploy is gated inside publishCmd
-    # on PUBLISH_ENABLED == 'true', so releases/tags happen immediately while
-    # publishing waits until Sonatype + GPG are configured.
+    # On every push to main: semantic-release computes the version, builds the JAR
+    # at that version, attaches it to a GitHub release, and tags v${version}.
+    # This SDK is NOT published to Maven Central — consumers build from source or
+    # pull a tag via JitPack. No registry, tokens, or GPG required.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -50,12 +50,6 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
-          # Configures ~/.m2/settings.xml with a <server id="central"> from these env vars.
-          server-id: central
-          server-username: CENTRAL_TOKEN_USERNAME
-          server-password: CENTRAL_TOKEN_PASSWORD
-          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg-passphrase: GPG_PASSPHRASE
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -65,11 +59,4 @@ jobs:
       - name: Semantic release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Gates the Maven Central deploy inside publishCmd. Set the repo variable
-          # PUBLISH_ENABLED=true once Sonatype + GPG secrets are in place.
-          PUBLISH_ENABLED: ${{ vars.PUBLISH_ENABLED }}
-          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
-          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: npx --yes -p semantic-release -p @semantic-release/exec semantic-release

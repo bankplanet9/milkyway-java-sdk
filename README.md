@@ -11,20 +11,33 @@ retries with backoff, typed exceptions, exact-decimal money, and a polling helpe
 
 ## Install
 
-### Maven
+This SDK is **not published to Maven Central**. Consume it via
+[JitPack](https://jitpack.io/) (builds the tag from source on demand), grab the
+JAR attached to a [GitHub release](https://github.com/bankplanet9/milkyway-java-sdk/releases),
+or build it yourself (`mvn -B -DskipTests package`).
+
+### Maven (JitPack)
 
 ```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+
 <dependency>
-  <groupId>com.bankplanet9</groupId>
-  <artifactId>milkyway-payments-sdk</artifactId>
-  <version>1.0.0</version>
+  <groupId>com.github.bankplanet9</groupId>
+  <artifactId>milkyway-java-sdk</artifactId>
+  <version>v1.0.0</version>
 </dependency>
 ```
 
-### Gradle
+### Gradle (JitPack)
 
 ```kotlin
-implementation("com.bankplanet9:milkyway-payments-sdk:1.0.0")
+repositories { maven { url = uri("https://jitpack.io") } }
+implementation("com.github.bankplanet9:milkyway-java-sdk:v1.0.0")
 ```
 
 ## Quick start
@@ -147,47 +160,22 @@ in-flight acquisition.
 exponential backoff until a terminal status or the poll-timeout budget (default 5
 min); if the budget is exhausted it returns the last observed status.
 
-## Releasing & Maven Central setup (one-time)
+## Releasing
 
 Versioning is automated with **semantic-release** (`.releaserc.json`, branches
-`["main"]`, tag format `v${version}`): conventional commits drive the version,
-`@semantic-release/exec` injects it into the POM
-(`mvn versions:set -DnewVersion=...`) and publishes with
-`mvn -Prelease deploy`. The `release` Maven profile carries GPG signing and the
-Sonatype Central Portal publishing plugin; a normal `mvn verify` activates neither,
-so local builds and CI tests need no GPG key or credentials.
+`["main"]`, tag format `v${version}`): conventional commits drive the version
+(`feat:` → minor, `fix:`/`perf:` → patch, `!` → major). On each release-worthy push
+to `main`, CI builds the JAR at that version, **attaches it to a GitHub release**,
+and tags `vX.Y.Z`.
 
-The release job is **gated on the repo variable `PUBLISH_ENABLED=true`**, so it is
-skipped until you have completed the steps below — a release can never fail
-half-configured.
+This SDK is intentionally **not published to a package registry** — no Maven Central,
+no Sonatype account, no GPG key. Consumers get it three ways:
 
-**To enable publishing to Maven Central:**
-
-1. **Register & verify the namespace.** Sign in to the
-   [Sonatype Central Portal](https://central.sonatype.com/), add the namespace
-   `com.bankplanet9`, and verify ownership (DNS TXT record for the domain, or the
-   GitHub-org verification flow). Wait until the namespace shows as *Verified*.
-2. **Create a publishing token.** In the Central Portal under *Account → Generate
-   User Token*, generate a token; note the **username** and **password** halves.
-3. **Generate a GPG key and publish it.**
-   ```bash
-   gpg --gen-key                                  # or --full-generate-key
-   gpg --list-secret-keys --keyid-format=long     # note the key id
-   gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>
-   gpg --export-secret-keys --armor <KEY_ID>      # this is GPG_PRIVATE_KEY
-   ```
-   Also send the key to `keys.openpgp.org` for redundancy.
-4. **Add CI secrets** (repo *Settings → Secrets and variables → Actions → Secrets*):
-   - `CENTRAL_TOKEN_USERNAME` — Central Portal token username
-   - `CENTRAL_TOKEN_PASSWORD` — Central Portal token password
-   - `GPG_PRIVATE_KEY` — the ASCII-armored private key from step 3
-   - `GPG_PASSPHRASE` — the key's passphrase
-5. **Add the repo variable** (same page, *Variables* tab):
-   - `PUBLISH_ENABLED` = `true`
-
-Once these are present, every push to `main` with a release-worthy commit cuts a
-`vX.Y.Z` tag + GitHub release and deploys signed artifacts (jar + sources +
-javadoc) to Maven Central.
+- **JitPack** — `com.github.bankplanet9:milkyway-java-sdk:vX.Y.Z` (builds the tag from
+  source on first request; see [Install](#install)).
+- **GitHub release asset** — download the JAR attached to any
+  [release](https://github.com/bankplanet9/milkyway-java-sdk/releases).
+- **Build from source** — `mvn -B -DskipTests package`.
 
 ## License
 
