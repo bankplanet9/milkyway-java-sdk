@@ -1,0 +1,19 @@
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+
+# Maven versioning backups
+pom.xml.versionsBackup
+
+# Node (semantic-release transient)
+node_modules/

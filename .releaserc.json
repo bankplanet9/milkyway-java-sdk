@@ -1,0 +1,16 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "mvn -B versions:set -DnewVersion=${nextRelease.version} -DgenerateBackupPoms=false",
+        "publishCmd": "if [ \"$PUBLISH_ENABLED\" = \"true\" ]; then mvn -B -Prelease deploy -DskipTests; else echo 'PUBLISH_ENABLED!=true - skipping Maven Central deploy (tag + GitHub release still created)'; fi"
+      }
+    ],
+    "@semantic-release/github"
+  ]
+}
