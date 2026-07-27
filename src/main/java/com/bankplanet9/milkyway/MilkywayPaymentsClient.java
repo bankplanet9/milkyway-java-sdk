@@ -9,15 +9,18 @@ import com.bankplanet9.milkyway.exception.MilkywayNotFoundException;
 import com.bankplanet9.milkyway.exception.MilkywayServiceUnavailableException;
 import com.bankplanet9.milkyway.exception.MilkywayValidationException;
 import com.bankplanet9.milkyway.internal.CancelRequest;
+import com.bankplanet9.milkyway.internal.DiscoveryResponse;
 import com.bankplanet9.milkyway.internal.HttpExecutor;
 import com.bankplanet9.milkyway.internal.MilkywayJson;
 import com.bankplanet9.milkyway.internal.PayResponse;
 import com.bankplanet9.milkyway.model.CancelResult;
+import com.bankplanet9.milkyway.model.Destination;
 import com.bankplanet9.milkyway.model.PayRequest;
 import com.bankplanet9.milkyway.model.PostcheckResult;
 import com.bankplanet9.milkyway.model.PrecheckRequest;
 import com.bankplanet9.milkyway.model.PrecheckResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
@@ -28,6 +31,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Client for the MilkyWay Payments API ({@code /payments/v1}).
@@ -40,6 +46,9 @@ import java.time.Duration;
 public final class MilkywayPaymentsClient {
 
     private static final String PAYMENTS_PATH = "payments/v1";
+
+    private static final TypeReference<Map<String, Object>> SCHEMA_TYPE = new TypeReference<Map<String, Object>>() {
+    };
 
     private final String baseUrl;
     private final HttpExecutor executor;
@@ -137,6 +146,48 @@ public final class MilkywayPaymentsClient {
         return sendForJson(builder, true, CancelResult.class);
     }
 
+    /** Convenience overload: the full discovery catalog, unfiltered by country. */
+    public List<Destination> discovery() {
+        return discovery(null);
+    }
+
+    /**
+     * GET {@code /payments/v1/discovery}. Lists the destination banks you can pay and
+     * the services each can receive through. Pass an ISO 3166-1 alpha-2 {@code country}
+     * (case-insensitive) to filter; pass {@code null} or blank to list all.
+     *
+     * <p>Each {@code ServiceCapability} omits its JSON Schema — fetch it on demand with
+     * {@link #serviceSchema(String, String)}.
+     */
+    public List<Destination> discovery(String country) {
+        String uri = baseUrl + PAYMENTS_PATH + "/discovery";
+        if (!isBlank(country)) {
+            uri += "?country=" + enc(country);
+        }
+        HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(uri)).GET();
+        DiscoveryResponse response = sendForJson(builder, true, DiscoveryResponse.class);
+        List<Destination> destinations = response.getDestinations();
+        return destinations != null ? destinations : Collections.emptyList();
+    }
+
+    /**
+     * GET {@code /payments/v1/discovery/{thirdPartyId}/{serviceId}/schema}. Returns the
+     * service's raw Draft-2020 JSON Schema as a parsed {@code Map}, describing the
+     * {@code data} payload a {@code pay}/{@code precheck} for this service must satisfy.
+     */
+    public Map<String, Object> serviceSchema(String thirdPartyId, String serviceId) {
+        if (isBlank(thirdPartyId)) {
+            throw new IllegalArgumentException("thirdPartyId is required.");
+        }
+        if (isBlank(serviceId)) {
+            throw new IllegalArgumentException("serviceId is required.");
+        }
+        String uri = baseUrl + PAYMENTS_PATH + "/discovery/" + encPath(thirdPartyId)
+                + "/" + encPath(serviceId) + "/schema";
+        HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(uri)).GET();
+        return sendForJson(builder, true, SCHEMA_TYPE);
+    }
+
     /** Polls {@code postcheck} with default {@link PollOptions} until terminal or timeout. */
     public PostcheckResult waitForCompletion(long transactionId) {
         return waitForCompletion(transactionId, PollOptions.defaults());
@@ -188,6 +239,24 @@ public final class MilkywayPaymentsClient {
     }
 
     private <T> T sendForJson(HttpRequest.Builder builder, boolean retryable, Class<T> type) {
+        HttpResponse<String> response = sendChecked(builder, retryable);
+        try {
+            return requireNonNull(MilkywayJson.MAPPER.readValue(response.body(), type), response);
+        } catch (IOException ex) {
+            throw parseFailure(response, ex);
+        }
+    }
+
+    private <T> T sendForJson(HttpRequest.Builder builder, boolean retryable, TypeReference<T> type) {
+        HttpResponse<String> response = sendChecked(builder, retryable);
+        try {
+            return requireNonNull(MilkywayJson.MAPPER.readValue(response.body(), type), response);
+        } catch (IOException ex) {
+            throw parseFailure(response, ex);
+        }
+    }
+
+    private HttpResponse<String> sendChecked(HttpRequest.Builder builder, boolean retryable) {
         HttpResponse<String> response;
         try {
             response = executor.send(builder, retryable);
@@ -195,22 +264,23 @@ public final class MilkywayPaymentsClient {
             throw new MilkywayServiceUnavailableException(0,
                     "The Payments API could not be reached.", null);
         }
-
-        String body = response.body();
         if (!isSuccess(response.statusCode())) {
-            throw toException(response.statusCode(), body);
+            throw toException(response.statusCode(), response.body());
         }
-        try {
-            T parsed = MilkywayJson.MAPPER.readValue(body, type);
-            if (parsed == null) {
-                throw new MilkywayApiException(response.statusCode(),
-                        "The API returned an empty response.", body);
-            }
-            return parsed;
-        } catch (IOException ex) {
+        return response;
+    }
+
+    private static <T> T requireNonNull(T parsed, HttpResponse<String> response) {
+        if (parsed == null) {
             throw new MilkywayApiException(response.statusCode(),
-                    "Failed to parse the API response.", body, ex);
+                    "The API returned an empty response.", response.body());
         }
+        return parsed;
+    }
+
+    private static MilkywayApiException parseFailure(HttpResponse<String> response, IOException ex) {
+        return new MilkywayApiException(response.statusCode(),
+                "Failed to parse the API response.", response.body(), ex);
     }
 
     private static MilkywayApiException toException(int status, String body) {
@@ -272,6 +342,11 @@ public final class MilkywayPaymentsClient {
 
     private static String enc(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    /** URL-encodes a single path segment ({@code +} means space in a query, not a path). */
+    private static String encPath(String value) {
+        return enc(value).replace("+", "%20");
     }
 
     private static void sleep(Duration d) {
