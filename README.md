@@ -97,6 +97,37 @@ lifetime. It owns its `HttpClient`; the Keycloak token endpoint is reached over 
 separate `HttpClient` so token acquisition never recurses through the
 auth/retry pipeline.
 
+## Discovery
+
+Two read-only endpoints let you discover who you can pay and what each service's
+`data` payload must look like — no payment is created.
+
+```java
+import com.bankplanet9.milkyway.model.Destination;
+import com.bankplanet9.milkyway.model.ServiceCapability;
+import java.util.List;
+import java.util.Map;
+
+// 1. List destination banks and their services (optionally filter by ISO 3166-1
+//    alpha-2 country; case-insensitive). Omit the country to list all.
+List<Destination> destinations = client.discovery("TJ");   // or client.discovery()
+for (Destination d : destinations) {
+    System.out.println(d.getThirdPartyId() + " (" + d.getPartnerName() + ")");
+    for (ServiceCapability svc : d.getServices()) {
+        System.out.println("  " + svc.getServiceId() + " via " + svc.getPayoutMethod()
+                + " " + svc.getPayoutCurrencies());
+    }
+}
+
+// 2. Fetch a service's JSON Schema (Draft 2020-12) — the shape of the `data`
+//    payload a precheck/pay for that service must satisfy.
+Map<String, Object> schema = client.serviceSchema("recipient-bank-id", "card-payout");
+```
+
+The listing omits each service's schema for compactness; fetch it on demand with
+`serviceSchema(thirdPartyId, serviceId)`. Both calls raise `MilkywayAuthException`
+on `401`, and `serviceSchema` raises `MilkywayNotFoundException` on `404`.
+
 ## Money & types
 
 Money is always `java.math.BigDecimal`, never `double`. Amounts are sent and
