@@ -62,13 +62,25 @@ MilkywayPaymentsClient client = new MilkywayPaymentsClient(options);
 // 1. Health of a recipient service
 String health = client.healthcheck("recipient-bank-id", "card-payout");
 
+// Your customer (the payer). Fill what you hold; the service's party profile in
+// discovery says which fields the recipient bank requires.
+PartyInfo sender = new PartyInfo()
+        .setPartyType(PartyType.NATURAL)
+        .setName(new PartyName().setFirst("Ivan").setLast("Petrov").setFull("Petrov Ivan Sergeevich"))
+        .setDateOfBirth("1990-04-18")
+        .setIdentityDocumentType(IdentityDocumentType.PASSPORT)
+        .setIdentityDocumentNumber("AB1234567")
+        .setIdentityDocumentCountry("TJ")
+        .setCountryOfResidence("AE");
+
 // 2. Quote (FX rate + commission), no payment created
 PrecheckResult quote = client.precheck(new PrecheckRequest()
         .setThirdPartyIdDebit("recipient-bank-id")
         .setServiceId("card-payout")
         .setRecipientId("recipient-ref")
         .setAmountCredit(new BigDecimal("100.00"))
-        .setCurrencyCredit("USD"));
+        .setCurrencyCredit("USD")
+        .setSenderInfo(sender));
 System.out.println(quote.getAmountDebit() + " " + quote.getCurrencyDebit());
 
 // 3. Pay — pass a stable Idempotency-Key to make the call safely retryable
@@ -78,7 +90,8 @@ long transactionId = client.pay(new PayRequest()
         .setSenderId("sender-ref")
         .setRecipientId("recipient-ref")
         .setAmountCredit(new BigDecimal("100.00"))
-        .setCurrencyCredit("USD"), "order-4242");
+        .setCurrencyCredit("USD")
+        .setSenderInfo(sender), "order-4242");
 
 // 4. Poll until terminal
 PostcheckResult result = client.waitForCompletion(transactionId);
@@ -99,11 +112,13 @@ auth/retry pipeline.
 
 ## Discovery
 
-Two read-only endpoints let you discover who you can pay and what each service's
-`data` payload must look like — no payment is created.
+Two read-only endpoints let you discover who you can pay, which payer and
+beneficiary fields each service needs, and what its `data` extras (if any) must look
+like — no payment is created.
 
 ```java
 import com.bankplanet9.milkyway.model.Destination;
+import com.bankplanet9.milkyway.model.PartyProfile;
 import com.bankplanet9.milkyway.model.ServiceCapability;
 import java.util.List;
 import java.util.Map;
@@ -116,17 +131,75 @@ for (Destination d : destinations) {
     for (ServiceCapability svc : d.getServices()) {
         System.out.println("  " + svc.getServiceId() + " via " + svc.getPayoutMethod()
                 + " " + svc.getPayoutCurrencies());
+        // Which senderInfo fields the recipient bank requires, e.g. [name.first, date_of_birth].
+        PartyProfile profile = svc.getPartyProfile();
+        if (profile != null && profile.getSenderInfo() != null) {
+            System.out.println("    sender requires " + profile.getSenderInfo().getRequired());
+        }
     }
 }
 
 // 2. Fetch a service's JSON Schema (Draft 2020-12) — the shape of the `data`
-//    payload a precheck/pay for that service must satisfy.
+//    extras a precheck/pay for that service must satisfy (most services take none).
 Map<String, Object> schema = client.serviceSchema("recipient-bank-id", "card-payout");
 ```
 
 The listing omits each service's schema for compactness; fetch it on demand with
 `serviceSchema(thirdPartyId, serviceId)`. Both calls raise `MilkywayAuthException`
 on `401`, and `serviceSchema` raises `MilkywayNotFoundException` on `404`.
+
+## Payer and beneficiary (`senderInfo`, `recipientInfo`)
+
+The identity of your customer (`senderInfo`, the originator) and of the beneficiary
+(`recipientInfo`) travels in two typed `PartyInfo` objects that are **the same for
+every recipient bank and service** (FATF Travel Rule / ISO 20022 / IVMS101
+originator–beneficiary data). Map your customer data to it once; each recipient
+bank's connector converts it to that bank's format. The account, card or phone stays
+in `senderId` / `recipientId` — these objects carry the person.
+
+| Setter | Wire field | Format |
+| --- | --- | --- |
+| `setPartyType` | `party_type` | `PartyType.NATURAL` (the default, always sent). `PartyType.LEGAL` is not accepted by the API yet. |
+| `setName(new PartyName().setFirst/setLast/setFull)` | `name.first`, `name.last`, `name.full` | Text. `full` is the name as written in the document, family name first, with a patronymic if any. |
+| `setDateOfBirth` | `date_of_birth` | ISO 8601 date, `YYYY-MM-DD`. |
+| `setIdentityDocumentType` | `identity_document_type` | An `IdentityDocumentType` constant: `PASSPORT`, `NATIONAL_ID`, `DRIVER_LICENSE`, `RESIDENCE_PERMIT`, `TAX_ID`, `SOCIAL_SECURITY`, `OTHER`. Required with `setIdentityDocumentNumber`. |
+| `setIdentityDocumentNumber` | `identity_document_number` | Series and number together, as in the document. |
+| `setIdentityDocumentCountry`, `setCountryOfResidence` | `identity_document_country`, `country_of_residence` | ISO 3166-1 alpha-2, upper case (`TJ`). |
+| `setAddress(new PartyAddress()...)` | `address` | `country` (required when an address is sent), `city`, `street`, `building`, `postalCode`, and `line` — up to 7 free-text lines. |
+
+Text values are at most 256 characters. Null and empty values are left off the wire.
+The server refuses a value of the wrong type or an invalid value with `400`
+(`MilkywayValidationException`) naming the field, e.g.
+`sender_info.identity_document_type`.
+
+**Which fields a service needs** is set by the recipient bank and published per
+service as `ServiceCapability.getPartyProfile()` in `discovery(...)`: `getRequired()`
+and `getAccepted()` field paths (e.g. `name.first`, `date_of_birth`) for
+`getSenderInfo()` and `getRecipientInfo()`, and, when the bank takes only some
+document kinds, `getIdentityDocumentTypes()`. A precheck or pay missing a required
+field is refused with `400` naming it (`sender_info.date_of_birth: is required by the
+receiving bank for this service`). Send the fields you have; fields the bank does not
+use are ignored.
+
+```java
+PayRequest req = new PayRequest()
+        // ...
+        .setSenderInfo(sender)
+        .setRecipientInfo(new PartyInfo()
+                .setName(new PartyName().setFirst("Aziz").setLast("Karimov"))
+                .setAddress(new PartyAddress().setCountry("TJ").setCity("Dushanbe")));
+```
+
+Identity must **not** be put in `data`: MilkyWay never reads it from there.
+
+## Service-specific extras (`data`)
+
+`setData(...)` carries only what a service needs beyond the parties (for example a
+test control field on the stage stub bank). Most services take no `data` fields. When
+one does, `serviceSchema(thirdPartyId, serviceId)` returns its JSON Schema, and the
+recipient bank validates it during precheck. The human-browsable registry of banks,
+services, party profiles and `data` fields is the **Handbook** at
+<https://docs.planet9.ae/site/milkyway-handbook/en/> (section **Services**).
 
 ## Money & types
 
@@ -166,7 +239,7 @@ try {
 } catch (MilkywayExposureBlockedException e) {
     // 402 — payment would breach a block-action exposure limit
 } catch (MilkywayValidationException e) {
-    // 400 — bad request (e.g. e.getMessage())
+    // 400 — bad request (e.g. e.getMessage(): "sender_info.date_of_birth: is required ...")
 } catch (MilkywayApiException e) {
     // anything else: e.getStatusCode(), e.getResponseBody()
 }

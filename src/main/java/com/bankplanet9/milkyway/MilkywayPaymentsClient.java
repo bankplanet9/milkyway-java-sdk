@@ -156,7 +156,9 @@ public final class MilkywayPaymentsClient {
      * the services each can receive through. Pass an ISO 3166-1 alpha-2 {@code country}
      * (case-insensitive) to filter; pass {@code null} or blank to list all.
      *
-     * <p>Each {@code ServiceCapability} omits its JSON Schema — fetch it on demand with
+     * <p>Each {@code ServiceCapability} carries its {@code PartyProfile} — which
+     * {@code senderInfo} / {@code recipientInfo} fields the recipient bank requires — and
+     * omits its {@code data} JSON Schema; fetch that on demand with
      * {@link #serviceSchema(String, String)}.
      */
     public List<Destination> discovery(String country) {
@@ -173,7 +175,8 @@ public final class MilkywayPaymentsClient {
     /**
      * GET {@code /payments/v1/discovery/{thirdPartyId}/{serviceId}/schema}. Returns the
      * service's raw Draft-2020 JSON Schema as a parsed {@code Map}, describing the
-     * {@code data} payload a {@code pay}/{@code precheck} for this service must satisfy.
+     * {@code data} extras (never identity) a {@code pay}/{@code precheck} for this service
+     * must satisfy. Most services take none.
      */
     public Map<String, Object> serviceSchema(String thirdPartyId, String serviceId) {
         if (isBlank(thirdPartyId)) {
