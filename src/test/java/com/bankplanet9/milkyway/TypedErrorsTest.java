@@ -184,8 +184,9 @@ class TypedErrorsTest {
         assertEquals("ErrPaymentRejected", MilkywayPaymentsClient.errorCodeOf("ErrPaymentRejected"));
         assertEquals("ErrRecipientRateUnavailable",
                 MilkywayPaymentsClient.errorCodeOf("ErrRecipientRateUnavailable: no rate for USD->TJS"));
+        assertEquals("ErrSome_Code", MilkywayPaymentsClient.errorCodeOf("  ErrSome_Code : detail"));
         assertNull(MilkywayPaymentsClient.errorCodeOf("Errors happened"));
-        assertNull(MilkywayPaymentsClient.errorCodeOf("Err"));
+        assertNull(MilkywayPaymentsClient.errorCodeOf("Errors happened: detail"));
         assertNull(MilkywayPaymentsClient.errorCodeOf("amount must be positive"));
         assertNull(MilkywayPaymentsClient.errorCodeOf(null));
     }
