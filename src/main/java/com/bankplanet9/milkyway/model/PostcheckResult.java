@@ -11,7 +11,11 @@ public final class PostcheckResult {
     @JsonProperty("status")
     private TransactionStatus status;
 
-    /** Failure detail; present only when the payment failed. */
+    /**
+     * The receiving bank's reason code for a terminal outcome, when it gave one — one of
+     * the {@link StatusReason} constants (e.g. {@link StatusReason#PAYMENT_REJECTED}),
+     * never the bank's own text. {@code null} when no reason was given.
+     */
     @JsonProperty("error")
     private String error;
 
@@ -23,6 +27,7 @@ public final class PostcheckResult {
         return status;
     }
 
+    /** @return a {@link StatusReason} code, or {@code null}. */
     public String getError() {
         return error;
     }

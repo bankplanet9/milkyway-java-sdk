@@ -6,6 +6,8 @@ import com.bankplanet9.milkyway.exception.MilkywayApiException;
 import com.bankplanet9.milkyway.exception.MilkywayAuthException;
 import com.bankplanet9.milkyway.exception.MilkywayExposureBlockedException;
 import com.bankplanet9.milkyway.exception.MilkywayNotFoundException;
+import com.bankplanet9.milkyway.exception.MilkywayPaymentRejectedException;
+import com.bankplanet9.milkyway.exception.MilkywayRecipientBankException;
 import com.bankplanet9.milkyway.exception.MilkywayServiceUnavailableException;
 import com.bankplanet9.milkyway.exception.MilkywayValidationException;
 import com.bankplanet9.milkyway.internal.CancelRequest;
@@ -99,7 +101,17 @@ public final class MilkywayPaymentsClient {
         return response.body();
     }
 
-    /** POST {@code /payments/v1/precheck}. Returns the FX + commission quote. */
+    /**
+     * POST {@code /payments/v1/precheck}. Returns the FX + commission quote.
+     *
+     * @throws MilkywayValidationException       400 — invalid request; {@code getField()} names the field
+     *                                           (e.g. {@code recipient_id} when the receiving bank reports
+     *                                           the recipient invalid).
+     * @throws MilkywayExposureBlockedException  402 — would breach a block-action exposure limit.
+     * @throws MilkywayPaymentRejectedException  422 — the receiving bank refused the payment; not retried.
+     * @throws MilkywayRecipientBankException    502 — the receiving bank's connector failed; retried as a 5xx.
+     * @throws MilkywayServiceUnavailableException 503/5xx — a service is unavailable; retried.
+     */
     public PrecheckResult precheck(PrecheckRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("request is required.");
@@ -114,6 +126,13 @@ public final class MilkywayPaymentsClient {
      * <p>Without an idempotency key the call is NOT auto-retried (a duplicate
      * payment could otherwise be created). Pass a stable {@code idempotencyKey} to
      * make the call safely retryable.
+     *
+     * @throws MilkywayValidationException       400 — invalid request; {@code getField()} names the field.
+     * @throws MilkywayExposureBlockedException  402 — would breach a block-action exposure limit.
+     * @throws MilkywayPaymentRejectedException  422 — the receiving bank refused the payment; nothing was
+     *                                           created, and repeating the request will not change the answer.
+     * @throws MilkywayRecipientBankException    502 — the receiving bank's connector failed; nothing was created.
+     * @throws MilkywayServiceUnavailableException 503/5xx — a service is unavailable; nothing was created.
      */
     public long pay(PayRequest request, String idempotencyKey) {
         if (request == null) {
@@ -133,14 +152,30 @@ public final class MilkywayPaymentsClient {
         return pay(request, null);
     }
 
-    /** GET {@code /payments/v1/postcheck}. Returns the current transaction status. */
+    /**
+     * GET {@code /payments/v1/postcheck}. Returns the current transaction status; on a
+     * terminal outcome {@link PostcheckResult#getError()} may carry a
+     * {@link com.bankplanet9.milkyway.model.StatusReason} code.
+     */
     public PostcheckResult postcheck(long transactionId) {
         String uri = baseUrl + PAYMENTS_PATH + "/postcheck?transaction_id=" + transactionId;
         HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(uri)).GET();
         return sendForJson(builder, true, PostcheckResult.class);
     }
 
-    /** POST {@code /payments/v1/cancel}. Returns the resulting transaction status. */
+    /**
+     * POST {@code /payments/v1/cancel}. Returns the resulting transaction status.
+     *
+     * <p>A {@code 403} ({@code ErrPaymentCannotBeCanceled}) raises a plain
+     * {@link MilkywayApiException}: the payment can no longer be cancelled.
+     *
+     * @throws MilkywayNotFoundException          404 — not found, or not your transaction.
+     * @throws MilkywayRecipientBankException     502 — the receiving bank's connector failed; the payment
+     *                                            is unchanged.
+     * @throws MilkywayServiceUnavailableException 503 — the receiving bank could not be reached
+     *                                            ({@code getServiceId()}, {@code getThirdPartyId()} name it);
+     *                                            the payment is unchanged.
+     */
     public CancelResult cancel(long transactionId) {
         HttpRequest.Builder builder = jsonPost(PAYMENTS_PATH + "/cancel", new CancelRequest(transactionId));
         return sendForJson(builder, true, CancelResult.class);
@@ -287,43 +322,78 @@ public final class MilkywayPaymentsClient {
     }
 
     private static MilkywayApiException toException(int status, String body) {
-        String message = extractErrorMessage(body);
-        if (message == null) {
-            message = "Request failed with status " + status + ".";
-        }
+        ErrorBody err = ErrorBody.parse(body);
+        String message = err.error != null ? err.error : "Request failed with status " + status + ".";
+        String code = errorCodeOf(err.error);
         switch (status) {
             case 400:
-                return new MilkywayValidationException(message, body);
+                return new MilkywayValidationException(message, body, code, err.field);
             case 401:
                 return new MilkywayAuthException(message, body);
             case 402:
-                return new MilkywayExposureBlockedException(message, body);
+                return new MilkywayExposureBlockedException(message, body, code);
             case 404:
-                return new MilkywayNotFoundException(message, body);
+                return new MilkywayNotFoundException(message, body, code);
+            case 422:
+                return new MilkywayPaymentRejectedException(message, body, code);
+            case 502:
+                return new MilkywayRecipientBankException(message, body, code);
             default:
                 if (status >= 500) {
-                    return new MilkywayServiceUnavailableException(status, message, body);
+                    return new MilkywayServiceUnavailableException(status, message, body, code,
+                            err.serviceId, err.thirdPartyId);
                 }
-                return new MilkywayApiException(status, message, body);
+                return new MilkywayApiException(status, message, body, code, null);
         }
     }
 
-    private static String extractErrorMessage(String body) {
-        if (isBlank(body)) {
+    /** The leading {@code Err...} identifier of an {@code error} value, or {@code null}. */
+    static String errorCodeOf(String error) {
+        if (error == null || !error.startsWith("Err")) {
             return null;
         }
-        try {
-            JsonNode root = MilkywayJson.MAPPER.readTree(body);
-            if (root != null && root.isObject()) {
-                JsonNode err = root.get("error");
-                if (err != null && err.isTextual()) {
-                    return err.asText();
-                }
-            }
+        int end = 3;
+        while (end < error.length() && Character.isLetterOrDigit(error.charAt(end))) {
+            end++;
+        }
+        if (end == 3 || (end < error.length() && error.charAt(end) != ':')) {
             return null;
-        } catch (IOException ex) {
-            // Non-JSON body (e.g. plain-text 500 from healthcheck) — use it as-is.
-            return body.trim();
+        }
+        return error.substring(0, end);
+    }
+
+    /** The fields an error response may carry; any of them may be absent. */
+    private static final class ErrorBody {
+        String error;
+        String field;
+        String serviceId;
+        String thirdPartyId;
+
+        static ErrorBody parse(String body) {
+            ErrorBody result = new ErrorBody();
+            if (isBlank(body)) {
+                return result;
+            }
+            JsonNode root;
+            try {
+                root = MilkywayJson.MAPPER.readTree(body);
+            } catch (IOException ex) {
+                // Non-JSON body (e.g. plain-text 500 from healthcheck) — use it as-is.
+                result.error = body.trim();
+                return result;
+            }
+            if (root != null && root.isObject()) {
+                result.error = text(root, "error");
+                result.field = text(root, "field");
+                result.serviceId = text(root, "service_id");
+                result.thirdPartyId = text(root, "third_party_id");
+            }
+            return result;
+        }
+
+        private static String text(JsonNode root, String name) {
+            JsonNode node = root.get(name);
+            return node != null && node.isTextual() ? node.asText() : null;
         }
     }
 

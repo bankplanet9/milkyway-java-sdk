@@ -11,6 +11,7 @@ import com.bankplanet9.milkyway.model.PayRequest;
 import com.bankplanet9.milkyway.model.PostcheckResult;
 import com.bankplanet9.milkyway.model.PrecheckRequest;
 import com.bankplanet9.milkyway.model.PrecheckResult;
+import com.bankplanet9.milkyway.model.StatusReason;
 import com.bankplanet9.milkyway.model.TransactionStatus;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -146,12 +147,12 @@ class MilkywayPaymentsClientTest {
     @Test
     void postcheckFailedCarriesError() {
         server.onPath("/payments/v1/postcheck",
-                c -> new StubServer.Response(200, "{\"transaction_id\":7,\"status\":3,\"error\":\"boom\"}"));
+                c -> new StubServer.Response(200, "{\"transaction_id\":7,\"status\":3,\"error\":\"ErrPaymentRejected\"}"));
 
         PostcheckResult result = client.postcheck(7);
 
         assertEquals(TransactionStatus.FAILED, result.getStatus());
-        assertEquals("boom", result.getError());
+        assertEquals(StatusReason.PAYMENT_REJECTED, result.getError());
     }
 
     @Test

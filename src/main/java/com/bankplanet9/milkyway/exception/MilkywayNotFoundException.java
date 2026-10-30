@@ -6,6 +6,10 @@ public final class MilkywayNotFoundException extends MilkywayApiException {
     private static final long serialVersionUID = 1L;
 
     public MilkywayNotFoundException(String message, String responseBody) {
-        super(404, message, responseBody);
+        this(message, responseBody, null);
+    }
+
+    public MilkywayNotFoundException(String message, String responseBody, String errorCode) {
+        super(404, message, responseBody, errorCode, null);
     }
 }

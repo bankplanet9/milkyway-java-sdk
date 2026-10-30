@@ -16,8 +16,9 @@ import java.util.concurrent.ThreadLocalRandom;
  * <ul>
  *   <li>attaches the bearer token (cached, single-flight via the token provider);</li>
  *   <li>retries transient failures (HTTP 5xx, 408, and {@link IOException}) with
- *       exponential backoff + jitter, up to {@code maxRetries}; deterministic
- *       outcomes (400/401/402/404) are never retried;</li>
+ *       exponential backoff + jitter, up to {@code maxRetries} — this includes a
+ *       502 from a failed recipient bank connector; deterministic outcomes
+ *       (400/401/402/404/422 and every other 4xx except 408) are never retried;</li>
  *   <li>on a {@code 401}, force-refreshes the token once and replays the request;</li>
  *   <li>enforces a per-attempt request timeout via the {@link HttpRequest} timeout.</li>
  * </ul>
