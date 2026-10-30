@@ -3,6 +3,9 @@ package com.bankplanet9.milkyway;
 import com.bankplanet9.milkyway.exception.MilkywayAuthException;
 import com.bankplanet9.milkyway.exception.MilkywayNotFoundException;
 import com.bankplanet9.milkyway.model.Destination;
+import com.bankplanet9.milkyway.model.IdentityDocumentType;
+import com.bankplanet9.milkyway.model.PartyProfile;
+import com.bankplanet9.milkyway.model.PartyRequirements;
 import com.bankplanet9.milkyway.model.ServiceCapability;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -61,6 +65,34 @@ class DiscoveryTest {
         assertEquals("GET", req.method);
         assertNull(req.query, "no country filter must send no query string");
         assertEquals("Bearer tok", req.header("Authorization"));
+    }
+
+    @Test
+    void discoveryDecodesPartyProfileAndToleratesItsAbsence() {
+        server.onPath("/payments/v1/discovery", c -> new StubServer.Response(200,
+                "{\"destinations\":[{\"third_party_id\":\"bank-a\",\"services\":["
+                        + "{\"service_id\":\"card-payout\",\"party_profile\":{"
+                        + "\"sender_info\":{\"required\":[\"name.first\",\"name.last\",\"date_of_birth\","
+                        + "\"identity_document_type\",\"identity_document_number\"],"
+                        + "\"accepted\":[\"name.full\"],\"identity_document_types\":[\"passport\"]},"
+                        + "\"recipient_info\":{\"required\":[\"name.full\"]}}},"
+                        + "{\"service_id\":\"wallet\"}]}]}"));
+
+        List<ServiceCapability> services = client.discovery().get(0).getServices();
+
+        PartyProfile profile = services.get(0).getPartyProfile();
+        assertNotNull(profile);
+        PartyRequirements sender = profile.getSenderInfo();
+        assertEquals(List.of("name.first", "name.last", "date_of_birth", "identity_document_type",
+                "identity_document_number"), sender.getRequired());
+        assertEquals(List.of("name.full"), sender.getAccepted());
+        assertEquals(List.of(IdentityDocumentType.PASSPORT), sender.getIdentityDocumentTypes());
+        PartyRequirements recipient = profile.getRecipientInfo();
+        assertEquals(List.of("name.full"), recipient.getRequired());
+        assertNull(recipient.getAccepted());
+        assertNull(recipient.getIdentityDocumentTypes());
+
+        assertNull(services.get(1).getPartyProfile());
     }
 
     @Test

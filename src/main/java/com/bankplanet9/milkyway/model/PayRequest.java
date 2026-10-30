@@ -33,8 +33,28 @@ public final class PayRequest {
     private String currencyCredit;
 
     /**
-     * Service-specific payload, validated server-side against the service's JSON
-     * Schema. Omitted from the wire when null.
+     * Your customer, the originator ({@code sender_info}). Which fields are required is
+     * the service's {@link ServiceCapability#getPartyProfile() party profile} from
+     * discovery. Omitted from the wire when null.
+     */
+    @JsonProperty("sender_info")
+    private PartyInfo senderInfo;
+
+    /**
+     * The beneficiary ({@code recipient_info}). Which fields are required is the
+     * service's {@link ServiceCapability#getPartyProfile() party profile} from
+     * discovery. Omitted from the wire when null.
+     */
+    @JsonProperty("recipient_info")
+    private PartyInfo recipientInfo;
+
+    /**
+     * A service's non-identity extras, forwarded to the recipient bank. Never the
+     * payer's or beneficiary's identity — that goes in {@link #getSenderInfo() senderInfo}
+     * / {@link #getRecipientInfo() recipientInfo}. Most services take no fields; when one
+     * does, its JSON Schema is returned by
+     * {@link com.bankplanet9.milkyway.MilkywayPaymentsClient#serviceSchema(String, String)}.
+     * Omitted from the wire when null.
      */
     @JsonProperty("data")
     private Map<String, Object> data;
@@ -93,6 +113,24 @@ public final class PayRequest {
 
     public PayRequest setCurrencyCredit(String currencyCredit) {
         this.currencyCredit = currencyCredit;
+        return this;
+    }
+
+    public PartyInfo getSenderInfo() {
+        return senderInfo;
+    }
+
+    public PayRequest setSenderInfo(PartyInfo senderInfo) {
+        this.senderInfo = senderInfo;
+        return this;
+    }
+
+    public PartyInfo getRecipientInfo() {
+        return recipientInfo;
+    }
+
+    public PayRequest setRecipientInfo(PartyInfo recipientInfo) {
+        this.recipientInfo = recipientInfo;
         return this;
     }
 
