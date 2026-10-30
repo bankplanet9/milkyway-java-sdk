@@ -221,36 +221,75 @@ received as **bare JSON numbers** and parsed with
 ## Errors
 
 Every API error raises a subtype of `MilkywayApiException`, carrying
-`getStatusCode()` and the server's `error` message (and `getResponseBody()` for
-diagnostics):
+`getStatusCode()`, the server's `error` message as `getMessage()`, its
+machine-readable code as `getErrorCode()` (for example `ErrPaymentRejected`;
+`null` when the `error` does not start with an `Err...` code), and
+`getResponseBody()` for diagnostics:
 
-| HTTP  | Exception                              |
-| ----- | -------------------------------------- |
-| 400   | `MilkywayValidationException`          |
-| 401   | `MilkywayAuthException`                |
-| 402   | `MilkywayExposureBlockedException`     |
-| 404   | `MilkywayNotFoundException`            |
-| 5xx   | `MilkywayServiceUnavailableException`  |
-| other | `MilkywayApiException`                 |
+| HTTP  | Exception                              | Meaning |
+| ----- | -------------------------------------- | ------- |
+| 400   | `MilkywayValidationException`          | Invalid request. `getField()` names the field at fault, e.g. `amount_credit`, `currency_credit`, `sender_info.date_of_birth`, or `recipient_id` (`ErrRecipientInvalid`: the receiving bank rejects the recipient). |
+| 401   | `MilkywayAuthException`                | Missing or invalid token. |
+| 402   | `MilkywayExposureBlockedException`     | The payment would breach a block-action exposure limit. |
+| 404   | `MilkywayNotFoundException`            | Not found, or not your transaction. |
+| 422   | `MilkywayPaymentRejectedException`     | `ErrPaymentRejected` (precheck, pay): the receiving bank refused the payment on its merits. Nothing was created; repeating it will not change the answer. Never retried. |
+| 502   | `MilkywayRecipientBankException`       | `ErrRecipientBankError` (precheck, pay, cancel): the receiving bank's connector failed. Nothing was created and a cancelled payment is unchanged. Subclass of `MilkywayServiceUnavailableException`. |
+| 5xx   | `MilkywayServiceUnavailableException`  | A service is unavailable. On `503` (precheck, pay, cancel) `getServiceId()` and `getThirdPartyId()` name the downstream service; nothing was created. |
+| other | `MilkywayApiException`                 | e.g. `403` `ErrPaymentCannotBeCanceled` on cancel. |
 
 ```java
 try {
     client.pay(req, "order-4242");
+} catch (MilkywayPaymentRejectedException e) {
+    // 422 — the receiving bank declined; do not resend the same payment
+} catch (MilkywayRecipientBankException e) {
+    // 502 — the receiving bank's connector failed; retry later or use another service
+} catch (MilkywayServiceUnavailableException e) {
+    // 503/5xx — e.getServiceId(), e.getThirdPartyId(); safe to retry once it recovers
 } catch (MilkywayExposureBlockedException e) {
     // 402 — payment would breach a block-action exposure limit
 } catch (MilkywayValidationException e) {
-    // 400 — bad request (e.g. e.getMessage(): "sender_info.date_of_birth: is required ...")
+    // 400 — e.getField(): "sender_info.date_of_birth", "recipient_id", ...
 } catch (MilkywayApiException e) {
-    // anything else: e.getStatusCode(), e.getResponseBody()
+    // anything else: e.getStatusCode(), e.getErrorCode(), e.getResponseBody()
+}
+```
+
+`MilkywayRecipientBankException` extends `MilkywayServiceUnavailableException`, so
+an existing `catch (MilkywayServiceUnavailableException e)` still catches a `502`.
+Catch the subclass first when you want to tell them apart.
+
+### Status reasons
+
+On a terminal status, `PostcheckResult.getError()` (also from `waitForCompletion`)
+carries the receiving bank's reason as a **code**, never free text. Compare it with
+the `StatusReason` constants:
+
+| Constant                                  | Code                          |
+| ----------------------------------------- | ----------------------------- |
+| `StatusReason.PAYMENT_REJECTED`           | `ErrPaymentRejected` — the bank declined (also any reason it gave without a code) |
+| `StatusReason.RECIPIENT_NOT_FOUND`        | `ErrRecipientNotFound`        |
+| `StatusReason.RECIPIENT_INVALID`          | `ErrRecipientInvalid`         |
+| `StatusReason.SERVICE_UNAVAILABLE`        | `ErrServiceUnavailable`       |
+| `StatusReason.PAYMENT_CANNOT_BE_CANCELED` | `ErrPaymentCannotBeCanceled`  |
+
+`getError()` is `null` when the bank gave no reason. Treat an unknown code as a
+generic failure: new codes may be added.
+
+```java
+PostcheckResult result = client.waitForCompletion(transactionId);
+if (result.getStatus() == TransactionStatus.FAILED
+        && StatusReason.RECIPIENT_NOT_FOUND.equals(result.getError())) {
+    // ask the customer to check the recipient
 }
 ```
 
 ## Retries & idempotency
 
-- Transient failures — HTTP `5xx`, `408`, and `IOException` — are retried with
+- Transient failures — HTTP `5xx` (including `502`), `408`, and `IOException` — are retried with
   **exponential backoff + full jitter**, up to `maxRetries` (default 3, base delay
   500ms). Each attempt is bounded by `requestTimeout` (default 30s).
-- Deterministic outcomes (`400/401/402/404`) are **never** retried.
+- Deterministic outcomes (`400/401/402/404/422` and every other `4xx`) are **never** retried.
 - On a `401`, the SDK **force-refreshes the token once and replays** the request.
 - **`pay` without an `Idempotency-Key` is NOT auto-retried** (a retry could create a
   duplicate payment). Pass a stable key — `client.pay(req, "key")` — to opt into

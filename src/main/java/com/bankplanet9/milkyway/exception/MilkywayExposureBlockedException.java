@@ -9,6 +9,10 @@ public final class MilkywayExposureBlockedException extends MilkywayApiException
     private static final long serialVersionUID = 1L;
 
     public MilkywayExposureBlockedException(String message, String responseBody) {
-        super(402, message, responseBody);
+        this(message, responseBody, null);
+    }
+
+    public MilkywayExposureBlockedException(String message, String responseBody, String errorCode) {
+        super(402, message, responseBody, errorCode, null);
     }
 }
