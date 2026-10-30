@@ -347,19 +347,28 @@ public final class MilkywayPaymentsClient {
         }
     }
 
-    /** The leading {@code Err...} identifier of an {@code error} value, or {@code null}. */
+    /**
+     * The code that leads an {@code error} value: the text before the first {@code ':'},
+     * trimmed, when it starts with {@code Err} and has only letters, digits and
+     * {@code _}; otherwise {@code null}. Same rule as the other MilkyWay SDKs.
+     */
     static String errorCodeOf(String error) {
-        if (error == null || !error.startsWith("Err")) {
+        if (error == null) {
             return null;
         }
-        int end = 3;
-        while (end < error.length() && Character.isLetterOrDigit(error.charAt(end))) {
-            end++;
-        }
-        if (end == 3 || (end < error.length() && error.charAt(end) != ':')) {
+        int colon = error.indexOf(':');
+        String code = (colon >= 0 ? error.substring(0, colon) : error).trim();
+        if (!code.startsWith("Err")) {
             return null;
         }
-        return error.substring(0, end);
+        for (int i = 0; i < code.length(); i++) {
+            char ch = code.charAt(i);
+            boolean ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+            if (!ok) {
+                return null;
+            }
+        }
+        return code;
     }
 
     /** The fields an error response may carry; any of them may be absent. */
